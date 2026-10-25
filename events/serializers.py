@@ -1,0 +1,50 @@
+from rest_framework import serializers
+from typing import override
+from .models import Event, Reservation
+from django.db import transaction
+
+class EventSerializer(serializers.ModelSerializer):
+    reservations_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Event
+        fields = ['id', 'title', 'venue', 'date', 'total_seats', 
+                  'available_seats', 'status', 'created_at', 'reservations_count'
+                  ]
+
+    def get_reservations_count(self,obj):
+        return obj.reservations.filter(status='confirmed').count()
+    def validate(self, data):
+        if data.get('available_seats',0) > data.get('total_seats',0):
+            raise serializers.ValidationError('available_seats cannot exceed total_seats.')
+        return data
+
+
+class ReservationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Reservation
+        fields = [
+                    'id', 'event', 'attendee_name', 'attendee_email', 
+                  'seats_reserved', 'status', 'created_at'
+                  ]
+        read_only_fields = ['status', 'created_at']
+
+    def validate_seats_reserved(self, value):
+        if value < 1:
+            raise serializers.ValidationError('Must reserve at least 1 seat.')
+        return value
+    def validate(self, data):
+        event = data.get('event')
+        if event.status not in ('upcoming', 'ongoing'):
+            raise serializers.ValidationError(f'Cannot reserve seats for a {event.status} event')
+        if data.get('seats_reserved',0) > event.available_seats:
+            raise serializers.ValidationError(f'Only {event.available_seats} seats(s) available.')
+        
+        return data
+
+    @transaction.atomic #guard against cocncurrent requests
+    def create(self, validated_data):
+        event = validated_data['event']
+        event.available_seats -= validated_data['seats_reserved']
+        event.save(update_fields=['available_seats'])
+        return Reservation.objects.create(**validated_data)
