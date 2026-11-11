@@ -1,1 +1,1 @@
-web: gunicorn eventhub.wsgi
+web: gunicorn config.wsgi
